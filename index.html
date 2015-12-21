@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+      <link rel="stylesheet" type="text/css" href="style.css">
+    <title>BLS API How-To</title>
+  </head>
+  <body>
+    <h1>Making a web application with Node.js and the U.S. BLS API </h1>
+    <h3>By Michael Bamesberger</h3>
+    <p>The United States Bureau of Labor Statistics (BLS) is a federal agency which collects economic data and disseminates it
+    to policymakers, economists and the public. The employment and unemployment numbers it produces every
+    month are the BLS's most well known output, however it also collects data on prices, wages, productivity, worker benefits and more. </p>
+    
+    <p>Through its website,<a href ="http://www.bls.gov/developers/home.htm"> the BLS runs an API to provide public access to its economic data</a>. The API website includes snippets of code
+    in various programming languages to help users make requests of the data. The website, however, does not include any information about
+    how to make requests of the data using Node.js. We are going to use a combination of Node.js tools to display information on a web page in
+    an easy to understand way. This How-To guide will help developers make their own web applications with the BLS API. </p>
+    
+    <p>The API comes in two versions: a limited API
+    which does not require registration and a more wide-ranging API -- allowing requests of data like percent changes -- which does require registration. For the purposes of this How-To guide, we will
+    use the version which requires registration. If you plan on making more than 50 queries in one day, you'll want to register for the API.</p>
+    
+    <h3>Getting Started</h3>
+    
+    <p>First, navigate to the developer section of the <a href= "http://www.bls.gov/developers/">BLS website</a>. Click on the registration button and enter an email address
+    where the API key can be sent. This key will be included in your API requests and allow you access to the data. 
+    </p>
+    <img src = "Registration.jpg">
+
+  <h3>Signatures</h3>
+
+  <p>The API requires the developer to formulate different "signatures" depending on what type of data the developer would like to retrieve. 
+  A "single series" signature retrieves data over one of the last three years. A "multiple series" signature, on the other hand, retrieve's data for
+  more than one year of the last three years. Finally, there is an option to use a signature to retrieve data for one or more years within a time
+  frame of up to the last 20 years. For the purposes of this guide, we will be making a single series request.
+  
+  </p>
+
+  <h3>Formulating the Series ID</h3>
+  <p>The 20-digit "series id" allows the developer encode the specifics of the data request. The id is actually comprised of several different codes,
+  each with its own meaning. To get a better idea of the format, let's analyze how to form a request for unemployment data the area code 28107, which happens to be Midland, North Carolina. </p>
+  <img src = "Series_ID.png">
+  <p>As you can see above, this method is hardly user-friendly. Spaces 1 and 2 are the unemployment data prefix "LA". Space 3 indicates
+  whether the unemployment data will be "U" (unadjusted) or "S" (seasonally adjusted). Spaces 4 and 5 are <a href = "http://www.bls.gov/help/def/la.htm#areatype">the Area Type</a>, which designates how large
+  of area the developer wants unemployment data from, ranging from statewide to cities below 25,000 population. Spaces 6 through 18 are reserved for the
+  zip code, while spaces 19 and 20 indicate what we're looking for: the unemployment rate. Other options include employment, size of labor force and more.</p>  
+  
+  <h3>Making a request</h3>
+  <p>To quickly show what our data will look like, let's make a simple request using a URL.</p>
+  <code><pre>http://api.bls.gov/publicAPI/v2/timeseries/data/LAUCN281070000000003 </pre></code>
+  <p>Because the first part of the URL is constant for each request, our focus is to put together the correct series ID.
+  In this instance, I again used an ID that returns the BLS's unemployment data for Midland, North Carolina.</p>
+  <p>Here are the first few lines of the API's respose to our request, which is returned in JSON object format: </p>
+  <code><pre>{"status":"REQUEST_SUCCEEDED","responseTime":44,"message":[],
+  "Results":{ "series": [{"seriesID":"LAUCN281070000000003",</pre></code>
+  <p>The first two lines detail the status, response time and other information about the request.</p>
+  <code><pre>
+  "data":[{"year":"2015","period":"M09","periodName":"September","value":"8.1","footnotes":[{"code":"P","text":"Preliminary."}]},
+  </pre></code>
+  <p> The actual unemployment data begins after the
+  <code>"data":</code> section. Each of the labels that follow show some data point. In the line above, we see that the
+  API has returned the <code>"value"</code> or unemployment rate of 8.1 percent. The period where that data was recorded
+  appears to be <code>"M09"</code>, or the 9th month of 2015 (September). At the end of the line, we see a section of footnotes, where
+  we learn that the 8.1 percent unemployment rate number is preliminary data. Such data is subject to revision, according to the BLS.</p>
+  <code><pre>{"year":"2015","period":"M08","periodName":"August","value":"7.8","footnotes":[{}]},
+  {"year":"2015","period":"M07","periodName":"July","value":"9.8","footnotes":[{}]},
+  {"year":"2015","period":"M06","periodName":"June","value":"10.0","footnotes":[{}]},
+  {"year":"2015","period":"M05","periodName":"May","value":"10.2","footnotes":[{}]},</pre></code>
+  <p>Here are the next several lines in the result. As you can see, the data is listed in reverse chronological order and is not
+  listed as preliminary data. By default, our request returned data for the last three years, or until January 2013. There are many
+  nested layers to this result, which will become tricky as we seek to manipulate the data (we'll get to that later).</p>
+  
+  <h3>Making a request using Node.js</h3>
+  <p>Now that we understand what kind of data we will recieve from our API, lets make an HTTP call using Node.js.</p>
+  <p>First, let's open blank javascript file in your text editor.</p>
+  <code><pre> 
+  var express = require('express');
+  var app = express();
+  var handlebars = require('express-handlebars').create({defaultLayout:'main'});
+  var request = require('request');
+  
+  app.engine('handlebars', handlebars.engine);
+  app.set('view engine', 'handlebars');
+  app.set('port', 3000);
+
+</pre></code>
+  <p>Here is the beginning of our request. We will be using Express.js, which is a framework to help us build a simple
+  web application to retrieve our data. Right away you see we include <code> require('express')</code>, which will allow us to use Express.
+  We then call our express function, which returns an Express application. We'll also be using Handlebars, which is a library that helps
+  us generate templates. Our handlebars function can be found on line three (there will be more on this later). Finally, we will require the <code>request</code>
+  library, which will help us make our actual HTTP call to the API. In the next group, we have a number of function calls to the Express application, including <code>engine and set</code>. What we really need to pay attention to
+  here is our 'port,' which we set to 3000.</p>
+  
+  <p>Now, its time to make an actual call to the API.</p>
+  
+  <code><pre>var payload = 'LAUCN281070000000003';</pre></code>
+  
+  <p>Above, you see we've assigned our series ID for Midland, North Carolina to the <code>payload</code> variable. This will help keep things cleaner
+  in the call below.</p>
+  
+  <code><pre>
+  app.get('/',function(req,res,next){
+    var context = {};
+    request('http://api.bls.gov/publicAPI/v2/timeseries/data/' + payload, function(err, response, body){
+      if(!err && response.statusCode < 400){
+        context.body = body;
+        res.render('home',context);
+      } else {
+        console.log(err);
+        if(response){
+          console.log(response.statusCode);
+        }
+        next(err); 
+      }
+    });
+  });
+</pre></code>
+  <p>Let's break this call down. We'll begin with <code>app.get</code>, which takes two arguments: the first being the page to which the GET request
+  will be sent, and the second a function, which is like an event listener for incoming requests. The function takes three arguments, which include a request, response and next object.
+  The response object is primarily what we'll want to work with.</p>
+  <p>Next, let's take a look at the request, which againt takes two arguments.
+    The first argument is the BLS URL segment, with our our series ID added to the end (in the form of the payload variable).
+    The second is a function call which takes the arguments (also known as callbacks) of <code>err, response</code> and <code>body</code>.
+    The err object will hold an error if one exists, response will contain information like the status code,
+    and the body will contain the information we requested, which in this case is a JSON encoded object. 
+  </p>
+  <p>Inside the request's callback, we want to create an if/then statement. If there is no error and the status code returned in the response
+  is less than 400, we know we've made a successful call. Else, we want to log the error to the console. </p>
+  <p>After a successful call, we assign the body of our response to the <code>context</code> variable we assigned earlier.
+  Next, we want to call the render method on the res (response) object. In the call, we include path name <code>'home'</code>, which
+  is an template file within our application, and the context. This call routes the information to our webpage (more on this later).</p>
+  
+  <code><pre>app.use(function(req,res){
+  res.status(404);
+  res.render('404');
+});
+
+app.use(function(err, req, res, next){
+  console.error(err.stack);
+  res.status(500);
+  res.render('500');
+});
+
+app.listen(app.get('port'), function(){
+  console.log('Express started on http://localhost:' + app.get('port') + '; press Ctrl-C to terminate.');
+});
+</pre></code>
+  <p>After the request, we are almost ready to get our page up and running. The above code can be added to give
+  error messages to users if something goes wrong with the call.</p>
+  
+  <h3>Views</h3>
+  <p>Next, we need to display our data. Fortunately, the Handlebars templating system makes this easy. Let's take a look at the structure of our
+  directory and discuss what it means.</p>
+  <img src = "Views_folder.png">
+  <p>The views folder is located right alongside the javascript file that holds our request. Inside, we've got template HTML pages for the home
+  screen, the 404 error page and the 500 error page. Even deeper into the directory is the layouts folder, which contains the HTML template that
+  many of the pages will follow. Let's take a look at that template, named <code>main.handlebars</code>.</p>
+  <code><pre>&lt;!doctype html&gt;<br />
+&lt;html&gt;<br />
+&lt;head&gt;<br />
+	&lt;title&gt;BLS API Demo&lt;/title&gt;<br />
+&lt;/head&gt;<br />
+&lt;body&gt;<br />
+	{{{body}}}<br />
+&lt;/body&gt;<br />
+&lt;/html&gt;</pre></code>
+  <p>Looks pretty bare, right? Well, our code will actually insert the contents of our <code>home.handlebars</code> file into the <code>{{{body}}}</code> of this page.
+  Let's take a look at the <code>home.handlebars</code> page.</p>
+  <code><pre>&lt;h1&gt;The response from BLS is:&lt;/h1&gt;<br />
+&lt;p&gt;{{body}}&lt;/p&gt;<br />
+</pre></code>
+  <p>This also looks pretty simple. Here, the body of our request is shown in the <code>{{body}}</code>. Remember when we used <code>res.render('home',context);</code>
+  in our GET request? Here is where it can be displayed.</p>
+  <p>After creating and filling in handlebars templates for both the 404 and 500 error pages,
+  it's almost time to launch our web app. We must first install the correct packages <a href ="https://www.packtpub.com/books/content/using-handlebars-express">(more information on that here)</a>.
+  Once everything is together, its time to run <code>node blsApp.js</code> Then, navigate your browser to the server site, on port 3000.</p>
+  <p>Let's take a look at what we get:</p>
+  <img src = "BLS_Response.png">
+  
+  <h3>Parsing the data</h3>
+  <p>Now that we've completed a basic request, we can get on to something more advanced. We'll dig through the JSON encoded object and display the
+  unemployment data on our webpage in a much more user friendly way.</p>
+  <p>Let's revisit our get request. Let's use a loop to isolate the year, month and unemployment rate, then route the information to our home.handlebars page.</p>
+  <code><pre>app.get('/',function(req,res,next){
+  var context = {};
+  request('http://api.bls.gov/publicAPI/v2/timeseries/data/' + payload, function(err, response, body){
+    if(!err && response.statusCode < 400){
+      <b>context.body = JSON.parse(body);
+      var params = [];
+      for (var i in context.body.Results.series[0].data) {
+        params.push({'year': context.body.Results.series[0].data[i].year, 'periodName': context.body.Results.series[0].data[i].periodName,
+        'value': context.body.Results.series[0].data[i].value});
+      }
+      context.dataList = params;</b>
+      res.render('home',context);</pre></code>
+  <p>I've highlighted the additions to our request in bold. I first parse the body (which contains all of our returned data) and assign
+  it to <code>context.body</code>. I then create an array named <code>params</code>, which will hold our year, month and unemployment rate
+  data. Finally, I create a for-in loop, which is analogous to a simple (i = 0; i < length; i++) loop. This loop will iterate through our data
+  and allow us to push exactly what we need into our <code>params</code> array.</p>
+  <p>For this to work, we need to understand exactly which parts
+  of our BLS data are objects and which are arrays. For example, the <code>series</code> part of our data is actually an array, despite there being only
+  one. This exists because you can actually request multiple data series at one time. We, however, only requested one series of data. The <code>data</code>
+  section of our result is also an array. Here is where everything we want to pull resides.</p>
+  <code><pre>params.push({'year': context.body.Results.series[0].data[i].year, 'periodName': context.body.Results.series[0].data[i].periodName,
+        'value': context.body.Results.series[0].data[i].value});</pre></code>
+  <p>Above, let the loop iterate through <code>data[i]</code> while we select the year, month and unemployment rate with the dot operater,
+  then assign it to a key pair. We do this so it will work with our handlebars HTML template. Then, we assign <code>context.dataList = params;</code>
+  which we also do to work with our handlebars page. In fact, let's look at <code>home.handlebars</code> now.</p>
+  <code><pre>
+&lt;h1&gt;The response from BLS is:&lt;/h1&gt;
+&lt;ul&gt;
+   {{#each dataList}}
+       &lt;li&gt;Year: {{this.year}}, Month: {{this.periodName}}, Rate: {{this.value}}
+   {{/each}}
+&lt;/ul&gt;
+</pre></code>
+  <p>Here, we will make another loop of sorts to create a list for our data.
+  As you can see, we use <code>{{#each dataList}}</code> to create the loop. Inside, we use <code>this.</code> to allow for the current year, month and
+  unemployment rate to be printed for this instance of dataList, before moving to the next one.  </code></p>
+  <p>Now, its time to relaunch our application. After navigating to the webpage, let's take a look at our result:</p>
+  <img src ="Final_result.png">
+  <p>As you can see, we've displayed each result in an easy to read way. With a little more styling, you can be on your way to making your own
+  usable web application using the BLS API.</p>  
+  
+  
+  </body>
+</html>
+
+
